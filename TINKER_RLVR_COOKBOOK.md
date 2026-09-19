@@ -52,7 +52,7 @@ Base Qwen3.5-4B
   → C: 2 transfers      (SFT → RLVR)
        ├→ D: rank candidates     (SFT only; isolate optimality)
        └→ E: expanded subgraph   (SFT → RLVR; gold-free retrieval)
-            └→ F: reasoning traces (SFT → optional RLVR; think then answer)
+            └→ F: reasoning traces (SFT → RLVR; think then answer)
 ```
 
 Each stage reuses the previous **weights**, not just the code. The new dataset
@@ -83,7 +83,7 @@ The curriculum fixes that in three ways:
 | C | Chain three legs | Gold-assisted 2-transfer | B RL | `correct≈0.91` (best in curriculum) |
 | D | Pick earliest arrival among valid candidates | 5–10 RAPTOR journeys | C RL | `optimal=0.997` (ranking only) |
 | E | Same journey task, no gold retrieval | Deterministic expansion | C RL (not D) | `correct=0.85` |
-| F | Explain the choice in `<think>` then answer | Same as E + thinking | E RL | SFT + RL done |
+| F | Explain the choice in `<think>` then answer | Same as E + thinking | E RL | `correct=0.92` (default) |
 
 C is stronger than A/B even though it has more hops. That is expected under
 curriculum transfer: C inherits A+B training and gets a more explicit
@@ -98,8 +98,8 @@ trains. The default **checkpoint** is Experiment F RL (reasoning + journey) on
 top of that retrieval.
 
 F adds **visible reasoning** on top of E: the model is taught to write a short
-Danish chain-of-thought before the journey. RLVR (when run) still grades only
-the final journey text, not the prose quality of the thoughts.
+Danish chain-of-thought before the journey. RLVR still grades only the final
+journey text, not the prose quality of the thoughts.
 
 ### Training pattern (every stage)
 
@@ -118,8 +118,10 @@ timetable block.
 - **Alternative routes** (`alternativer` in chat) are a RAPTOR via-search, not
   a trained stage.
 - **Delay / “what if”** questions are not in the curriculum.
-- **Experiment F** trains reasoning traces; until F SFT is finished, `--thinking`
-  is still mostly inference-only on the E checkpoint.
+- **3+ transfers** are mostly OOD: A–C train 0–2 skift; E/F inherit that
+  distribution. Valid 3-skift answers can still fail `router` (wrong transfer
+  count or slower than RAPTOR). Next curriculum step would mix 3-skift data and
+  repair-style CoT (detect chronology error → replan).
 
 ## Prerequisites
 
@@ -138,7 +140,8 @@ cd C:\Users\I747069\Downloads\Tinker_Køreplan
 Default model is **`Qwen/Qwen3.5-4B`** — well-tested in Tinker RL recipes (`math_rl`, `code_rl`).
 
 - Renderer is auto-selected (`qwen3_5`).
-- Journey prompts/answers are short (~80 / ~460 chars), so 512 completion tokens is enough.
+- Journey prompts/answers are short for A/B/C (~80 / ~460 chars); use higher
+  `max_tokens` (e.g. 3072) when thinking is on (F).
 - Tinker Cookbook provides auto-LR formulas for Qwen3.5 if you want to tune further.
 
 Override model on the CLI:
@@ -1177,7 +1180,8 @@ python -m tinker_dsb_rl.ask --from Humlebæk --to Skive --after 08:00
 ```
 
 Web UI: `POST /api/plan` with `thinking=true` (default). The LLM tab shows a
-collapsible **Modellens reasoning** block.
+collapsible **Modellens reasoning** block. See **Web UI** below for how to start
+the servers.
 
 ### Step 4 — held-out eval + RLVR on F
 
@@ -1269,6 +1273,23 @@ and E RL on `correct` / `router` with thinking enabled.
 **Default checkpoint** is now F RL (`DEFAULT_SAMPLER` in `inference.py`);
 thinking + show-reasoning default on in `ask`/`chat`/UI.
 
+#### OOD smoke (manual UI)
+
+Curriculum is strongest on 0–2 transfers. Quick checks beyond that:
+
+| Query | Observation |
+|-------|-------------|
+| Esbjerg → Roskilde after 08:00 | In-distribution; model matched RAPTOR (1 skift) |
+| Alken → Næstved after 12:00 | 3 skift, same arrival as RAPTOR → `godkendt=ja` |
+| Frederikshavn → Esbjerg after 12:00 | Valid 2-skift path; 3-skift RAPTOR is ~28 min earlier |
+| Langå → Tønder after 09:15 | Same arrival, one extra skift vs RAPTOR |
+| Roskilde → Grenaa after 09:15 | CoT spotted bad chronology but still used it → `rute=0` |
+| Asnæs → Skanderborg after 16:00 | Near-miss: arrival 1 min late → `optimal=0` |
+
+Map hubs for small stations (Alken, Asnæs, Trekroner) live in `web/src/network.ts`.
+
+### Train E
+
 Warm-start from Exp C (not D). E contexts average ~5.3k tokens; use 32k
 sequence length and batch 4:
 
@@ -1317,6 +1338,33 @@ default checkpoint. Use `--heuristic-retrieval` only to compare against the old
 gold-free hub retriever; use `--checkpoint` with the E RL path for the previous
 silent policy.
 
+## Web UI
+
+React (Vite) frontend + FastAPI backend. Defaults: F RL sampler, thinking on,
+`max_transfers=3` (UI/API). Leaflet hubs live in `web/src/network.ts`.
+
+**Terminal 1 — API** (repo root, `dsbpy` active, `TINKER_API_KEY` set):
+
+```powershell
+cd C:\Users\I747069\Downloads\Tinker_Køreplan
+.\dsbpy\Scripts\Activate.ps1
+python -m tinker_dsb_rl.web_api
+```
+
+Listens on http://127.0.0.1:8765
+
+**Terminal 2 — frontend:**
+
+```powershell
+cd C:\Users\I747069\Downloads\Tinker_Køreplan\web
+npx vite --host 127.0.0.1 --port 5173
+```
+
+Open http://127.0.0.1:5173/ — Vite proxies `/api` to the backend.
+
+Engine modes: **LLM + RAPTOR**, **Kun RAPTOR**, or **Kun LLM**. RAPTOR-only
+does not need Tinker. The LLM tab shows reasoning when thinking is enabled.
+
 ### RAPTOR reconstruction correction
 
 The E coverage audit exposed a verifier defect: station-level parent links
@@ -1343,9 +1391,13 @@ coverage run contains only 0-, 1-, and 2-transfer journeys.
 | `tinker_dsb_rl/eval_expansion.py` | Experiment E context-coverage evaluation |
 | `tinker_dsb_rl/alternatives.py` | RAPTOR via-diverse alternative journeys |
 | `tinker_dsb_rl/export_reasoning_sft.py` | Experiment F reasoning SFT export |
-| `tinker_dsb_rl/web_api.py` | FastAPI for React UI (RAPTOR + LLM + thinking) |
+| `tinker_dsb_rl/web_api.py` | FastAPI for React UI (RAPTOR + LLM + thinking; `max_transfers` default 3) |
 | `web/` | Vite React UI — Leaflet map + routes + reasoning |
+| `web/src/network.ts` | Hub coordinates + corridors (incl. Alken, Asnæs, Trekroner) |
 | `eval_test100.json` | Offline eval results (100 test ODs × A/B/C) |
+| `eval_expansion_rl100.json` | Experiment E RL held-out (100) |
+| `eval_expansion_f_sft100.json` | Experiment F SFT held-out (100, thinking) |
+| `eval_expansion_f_rl100.json` | Experiment F RL held-out (100, thinking; production) |
 | `dsb_routing.py` | RAPTOR router (verifier) |
 | `generate_journeys.py` | `generate-direct` (A), `generate-transfer1` (B), `generate-transfer2` (C) |
 | `generate_ranking.py` | Experiment D candidate-ranking generator |
