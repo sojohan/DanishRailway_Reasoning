@@ -131,7 +131,7 @@ timetable block.
 4. **Python env** — your `dsbpy` venv already has `tinker` and `tinker_cookbook`.
 
 ```powershell
-cd C:\Users\I747069\Downloads\Tinker_Køreplan
+# From the repository root
 .\dsbpy\Scripts\Activate.ps1
 ```
 
@@ -1346,7 +1346,7 @@ React (Vite) frontend + FastAPI backend. Defaults: F RL sampler, thinking on,
 **Terminal 1 — API** (repo root, `dsbpy` active, `TINKER_API_KEY` set):
 
 ```powershell
-cd C:\Users\I747069\Downloads\Tinker_Køreplan
+# From the repository root
 .\dsbpy\Scripts\Activate.ps1
 python -m tinker_dsb_rl.web_api
 ```
@@ -1356,7 +1356,7 @@ Listens on http://127.0.0.1:8765
 **Terminal 2 — frontend:**
 
 ```powershell
-cd C:\Users\I747069\Downloads\Tinker_Køreplan\web
+cd web
 npx vite --host 127.0.0.1 --port 5173
 ```
 
